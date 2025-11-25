@@ -3,6 +3,7 @@ ANDROID Version
 
 Real-time voice monitoring for aggression, toxicity, and offensive speech using Whisper.cpp and Kotlin.
 
+
 ---
 
 ## 🎯 Features
@@ -22,7 +23,7 @@ Real-time voice monitoring for aggression, toxicity, and offensive speech using 
 - AudioRecord (16 kHz PCM)
 - Heuristic-based toxicity detection
 - Minimum SDK: 26
-
+- Add words toxic score adders in the list in Toxicity Heuristics
 ---
 
 ## 🗂️ Structure Overview
@@ -33,7 +34,7 @@ Real-time voice monitoring for aggression, toxicity, and offensive speech using 
 | `WhisperBridge.kt`      | JNI bridge to whisper.cpp          |
 | `whisper_jni.cpp`       | JNI glue logic (C++)               |
 | `whisper.cpp/`          | Whisper C++ engine                 |
-| `ToxicityHeuristics.kt` | Text & prosody-based scoring       |
+| `ToxicityHeuristics.kt` | Text & prosody-based scoring        |
 | `ConversationGuardScreen.kt` | Compose UI view            |
 
 ---

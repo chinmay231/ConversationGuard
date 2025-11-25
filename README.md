@@ -46,7 +46,7 @@ Real-time voice monitoring for aggression, toxicity, and offensive speech using 
 ---
 
 ## 📸 Screenshot
-https://github.com/chinmay231/ConversationGuard/blob/main/image.png
+<img width="692" height="1467" alt="image" src="https://github.com/user-attachments/assets/e6f60cc7-a3b9-4c35-8e31-3bc96305291e" />
 ---
 
 ## 🚀 Getting Started

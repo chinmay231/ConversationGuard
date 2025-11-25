@@ -1,0 +1,1227 @@
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/build.gradle.kts     >>>>>>>>>>>>>>>>>>>>
+
+plugins {
+    id("com.android.application")
+    kotlin("android")
+    // Required for Compose with Kotlin 2.x
+    id("org.jetbrains.kotlin.plugin.compose")
+}
+
+android {
+    namespace = "ai.guard"
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = "ai.guard"
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 1
+        versionName = "1.0"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+        }
+        debug {
+            isMinifyEnabled = false
+        }
+    }
+
+    // Align Java & Kotlin on the same JVM target
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    // Compose
+    buildFeatures {
+        compose = true
+    }
+    // No composeOptions block needed with Kotlin 2.x + compose plugin
+
+    // Native bridge
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
+    packaging {
+        resources.excludes += setOf(
+            "META-INF/LICENSE*",
+            "META-INF/NOTICE*",
+            "META-INF/INDEX.LIST"
+        )
+    }
+}
+
+dependencies {
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    // Activity / setContent
+    implementation("androidx.activity:activity-ktx:1.9.2")
+    implementation("androidx.activity:activity-compose:1.9.2")
+
+    // Compose BOM + Material3
+    val composeBom = platform("androidx.compose:compose-bom:2024.09.01")
+    implementation(composeBom)
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // XML-based Material theme (if any legacy XML UI)
+    implementation("com.google.android.material:material:1.12.0")
+}
+
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/src/main/AndroidManifest.xml     >>>>>>>>>>>>>>>>>>>>
+
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- We only need microphone access for this MVP -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="Conversation Guard"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.ConversationGuard">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+        </activity>
+
+    </application>
+
+</manifest>
+
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/src/main/cpp/CMakeLists.txt     >>>>>>>>>>>>>>>>>>>>
+
+cmake_minimum_required(VERSION 3.22.1)
+
+project(conguard_jni LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Disable x86 AVX/FMA so whisper builds cleanly for Android
+add_definitions(
+        -DWHISPER_NO_AVX2=1
+        -DWHISPER_NO_F16C=1
+        -DWHISPER_NO_FMA=1
+)
+
+# 1) Bring in upstream whisper.cpp as subproject
+#    Folder layout:
+#    app/src/main/cpp/
+#       CMakeLists.txt  (this file)
+#       whisper_jni.cpp
+#       whisper.cpp/    (upstream repo)
+add_subdirectory(whisper.cpp)
+
+# 2) Our JNI bridge library
+add_library(
+        conguard_jni
+        SHARED
+        whisper_jni.cpp
+)
+
+# 3) Include paths
+target_include_directories(
+        conguard_jni
+        PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/whisper.cpp
+)
+
+# 4) Android log lib
+find_library(log-lib log)
+
+# 5) Link against Android log + whisper target
+target_link_libraries(
+        conguard_jni
+        whisper
+        ggml
+        ggml-base
+        ggml-cpu
+        android
+        log
+)
+
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/src/main/cpp/whisper_jni.cpp     >>>>>>>>>>>>>>>>>>>>
+
+// app/src/main/cpp/whisper_jni.cpp
+
+#include <jni.h>
+#include <string>
+#include <vector>
+#include <sstream>
+#include <mutex>
+#include <thread>
+#include <android/log.h>
+
+extern "C" {
+#include "whisper.h"
+}
+
+#define LOG_TAG "ConversationGuardJNI"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+// Single global context (service-style)
+static whisper_context* g_ctx = nullptr;
+static std::mutex g_mutex;
+
+// Helper: jstring -> std::string (UTF-8)
+static std::string jstring_to_utf8(JNIEnv* env, jstring js) {
+    if (!js) return {};
+    const char* utf = env->GetStringUTFChars(js, nullptr);
+    if (!utf) return {};
+    std::string out(utf);
+    env->ReleaseStringUTFChars(js, utf);
+    return out;
+}
+
+// Pick a reasonable number of threads based on hardware
+static int choose_num_threads() {
+    unsigned int hw = std::thread::hardware_concurrency();
+    if (hw == 0) {
+        hw = 2;
+    }
+    // Don’t go crazy; 2–4 threads is usually fine on mobile
+    int t = static_cast<int>(hw);
+    if (t < 2) t = 2;
+    if (t > 4) t = 4;
+    return t;
+}
+
+// ------------ nativeInit(modelPath: String): Boolean ------------
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_ai_guard_native_WhisperBridge_nativeInit(
+        JNIEnv* env,
+        jclass /* clazz */,
+        jstring jModelPath) {
+
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    // If already initialized, free and re-init
+    if (g_ctx) {
+        LOGI("Releasing previous Whisper context before init");
+        whisper_free(g_ctx);
+        g_ctx = nullptr;
+    }
+
+    if (!jModelPath) {
+        LOGE("nativeInit: null model path");
+        return JNI_FALSE;
+    }
+
+    std::string modelPath = jstring_to_utf8(env, jModelPath);
+    if (modelPath.empty()) {
+        LOGE("nativeInit: empty model path");
+        return JNI_FALSE;
+    }
+
+    LOGI("Loading Whisper model from: %s", modelPath.c_str());
+    g_ctx = whisper_init_from_file(modelPath.c_str());
+    if (!g_ctx) {
+        LOGE("whisper_init_from_file() failed");
+        return JNI_FALSE;
+    }
+
+    const char* sys_info = whisper_print_system_info();
+    LOGI("Whisper system info: %s", sys_info);
+
+    return JNI_TRUE;
+}
+
+// ------------ nativeRelease(): void ------------
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_ai_guard_native_WhisperBridge_nativeRelease(
+        JNIEnv* /* env */,
+        jclass /* clazz */) {
+
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_ctx) {
+        LOGI("Releasing Whisper context");
+        whisper_free(g_ctx);
+        g_ctx = nullptr;
+    }
+}
+
+// ------------ nativeProcess(pcm: ShortArray, length: Int): String? ------------
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_ai_guard_native_WhisperBridge_nativeProcess(
+        JNIEnv* env,
+        jclass /* clazz */,
+        jshortArray jPcm,
+        jint length) {
+
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    if (!g_ctx) {
+        LOGE("nativeProcess: g_ctx is null – model not initialized");
+        return env->NewStringUTF("");
+    }
+
+    if (!jPcm || length <= 0) {
+        LOGE("nativeProcess: invalid PCM array or length=%d", length);
+        return env->NewStringUTF("");
+    }
+
+    const jint n_samples = length;
+
+    // Copy short PCM into float [-1, 1] as Whisper expects
+    std::vector<float> pcm(static_cast<size_t>(n_samples));
+
+    jshort* buf = env->GetShortArrayElements(jPcm, nullptr);
+    if (!buf) {
+        LOGE("nativeProcess: GetShortArrayElements returned null");
+        return env->NewStringUTF("");
+    }
+
+    for (jint i = 0; i < n_samples; ++i) {
+        pcm[static_cast<size_t>(i)] = buf[i] / 32768.0f;
+    }
+
+    env->ReleaseShortArrayElements(jPcm, buf, JNI_ABORT);
+
+    // Set up Whisper params
+    struct whisper_full_params wparams =
+            whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+
+    wparams.print_realtime   = false;
+    wparams.print_progress   = false;
+    wparams.print_timestamps = false;
+    wparams.print_special    = false;
+
+    wparams.translate        = false;   // just transcribe
+    wparams.no_context       = true;    // no previous text as context
+    wparams.single_segment   = false;   // allow multiple segments
+
+    int threads = choose_num_threads();
+    wparams.n_threads        = threads;
+
+    wparams.offset_ms        = 0;
+    wparams.duration_ms      = 0;       // 0 = full audio
+
+    LOGI("nativeProcess: n_samples=%d, using %d threads", n_samples, threads);
+
+    const int ret = whisper_full(
+            g_ctx,
+            wparams,
+            pcm.data(),
+            n_samples
+    );
+
+    if (ret != 0) {
+        LOGE("whisper_full() failed, ret=%d", ret);
+        return env->NewStringUTF("");
+    }
+
+    // Collect transcription segments
+    const int n_segments = whisper_full_n_segments(g_ctx);
+    std::ostringstream oss;
+
+    for (int i = 0; i < n_segments; ++i) {
+        const char* text = whisper_full_get_segment_text(g_ctx, i);
+        if (text && text[0] != '\0') {
+            if (i > 0) {
+                oss << ' ';
+            }
+            oss << text;
+        }
+    }
+
+    const std::string result = oss.str();
+    LOGI("nativeProcess: got transcript length=%zu", result.size());
+
+    return env->NewStringUTF(result.c_str());
+}
+
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/src/main/java/ai/guard/AppState.kt     >>>>>>>>>>>>>>>>>>>>
+
+package ai.guard
+
+import ai.guard.logic.Light
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+
+object AppState {
+
+    private val _isListening = MutableStateFlow(false)
+    val isListening: StateFlow<Boolean> = _isListening
+
+    private val _status = MutableStateFlow("Tap the microphone to start listening")
+    val status: StateFlow<String> = _status
+
+    private val _lastText = MutableStateFlow("")
+    val lastText: StateFlow<String> = _lastText
+
+    private val _toxicity = MutableStateFlow(0f)
+    val toxicity: StateFlow<Float> = _toxicity
+
+    private val _anger = MutableStateFlow(0f)
+    val anger: StateFlow<Float> = _anger
+
+    private val _light = MutableStateFlow(Light.GREEN)
+    val light: StateFlow<Light> = _light
+
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error
+
+    fun setListening(value: Boolean) {
+        _isListening.value = value
+    }
+
+    fun setStatus(value: String) {
+        _status.value = value
+    }
+
+    fun setError(message: String) {
+        _error.value = message
+    }
+
+    fun clearError() {
+        _error.value = null
+    }
+
+    fun updateFromAnalysis(
+        transcript: String,
+        toxicity: Float,
+        anger: Float,
+        light: Light
+    ) {
+        _lastText.value = transcript
+        _toxicity.value = toxicity.coerceIn(0f, 1f)
+        _anger.value = anger.coerceIn(0f, 1f)
+        _light.value = light
+    }
+}
+
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/src/main/java/ai/guard/logic/LightDecider.kt     >>>>>>>>>>>>>>>>>>>>
+
+package ai.guard.logic
+
+enum class Light {
+    GREEN,
+    YELLOW,
+    RED
+}
+
+/**
+ * Maps continuous scores (0..1) to a coarse traffic-light signal.
+ * You can adjust thresholds later if you want stricter or looser behavior.
+ */
+class LightDecider {
+
+    fun decide(
+        toxicity: Float,
+        anger: Float
+    ): Light {
+        val t = toxicity.coerceIn(0f, 1f)
+        val a = anger.coerceIn(0f, 1f)
+
+        // Weighted combination: textual toxicity carries more weight.
+        val combined = 0.7f * t + 0.3f * a
+
+        return when {
+            combined < 0.20f -> Light.GREEN
+            combined < 0.55f  -> Light.YELLOW
+            else             -> Light.RED
+        }
+    }
+}
+
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/src/main/java/ai/guard/logic/ToxicityHeuristics.kt     >>>>>>>>>>>>>>>>>>>>
+
+package ai.guard.logic
+
+import kotlin.math.exp
+import kotlin.math.sqrt
+
+/**
+ * Very lightweight, deterministic toxicity heuristics designed to be
+ * runnable entirely on-device, without any cloud model.
+ *
+ * - "lexical" score: based on explicit profanity / identity phrases
+ * - "prosody" score: based on short-term peak + RMS loudness
+ * - "combined" score: weighted fusion of both signals (0..1)
+ */
+object ToxicityHeuristics {
+
+    // Extremely small example lexicon, you can expand this.
+    private val profanityTerms = listOf(
+        "fuck", "fucking", "stupid", "bitch", "bastard", "asshole", "dick"
+    )
+
+    private val threatPhrases = listOf(
+        "kill you", "beat you", "hurt you", "smack you", "punch you"
+    )
+
+    private val identityPhrases = listOf(
+        "you people", "your kind"
+    )
+
+    /**
+     * Lexical toxicity score in [0,1].
+     * Counts profanities / threats and saturates.
+     */
+    fun lexicalScore(text: String): Float {
+        if (text.isBlank()) return 0f
+
+        val lower = text.lowercase()
+        var score = 0f
+
+        // crude counts
+        for (term in profanityTerms) {
+            if (lower.contains(term)) score += 0.40f
+        }
+        for (term in threatPhrases) {
+            if (lower.contains(term)) score += 0.2f
+        }
+        for (term in identityPhrases) {
+            if (lower.contains(term)) score += 0.1f
+        }
+
+        // presence of ALL CAPS words -> mild boost
+        val hasAllCapsWord = lower.split(Regex("\\s+"))
+            .any { token ->
+                token.length >= 4 && token.all { it.isLetter() } && token == token.uppercase()
+            }
+        if (hasAllCapsWord) {
+            score += 0.1f
+        }
+
+        return score.coerceIn(0f, 1f)
+    }
+
+    /**
+     * Prosody-based score in [0,1].
+     * Uses:
+     * - peak16: max absolute PCM16 amplitude
+     * - rms: root-mean-square of the signal
+     *
+     * We don't try to estimate absolute SPL, just relative loudness / sharpness.
+     */
+    fun prosodyScore(peak16: Int, rms: Double): Float {
+        if (peak16 <= 0 && rms <= 0.0) return 0f
+
+        // Normalize roughly from 0..1
+        val peakNorm = (peak16 / 32768.0).coerceIn(0.0, 1.0)
+        val rmsNorm = (rms / 2500.0).coerceIn(0.0, 1.0) // arbitrary scaling for 16k PCM
+
+        val loudness = 0.6 * peakNorm + 0.4 * rmsNorm
+
+        // Logistic shaping: low -> ~0, high -> ~1
+        val x = loudness - 0.4  // center around moderate loudness
+        val shaped = 1.0 / (1.0 + exp(-6.0 * x))
+
+        return shaped.toFloat().coerceIn(0f, 1f)
+    }
+
+    /**
+     * Combined toxicity score:
+     *  - lexical carries more weight (0.7)
+     *  - prosody modulates it (0.3)
+     */
+    fun combinedScore(text: String, peak16: Int, rms: Double): Float {
+        val lex = lexicalScore(text)
+        val pros = prosodyScore(peak16, rms)
+        return (0.7f * lex + 0.3f * pros).coerceIn(0f, 1f)
+    }
+}
+
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/src/main/java/ai/guard/MainActivity.kt     >>>>>>>>>>>>>>>>>>>>
+
+package ai.guard
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.pm.PackageManager
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.os.Bundle
+import android.util.Log
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import ai.guard.logic.LightDecider
+import ai.guard.logic.ToxicityHeuristics
+import ai.guard.native.WhisperBridge
+import ai.guard.ui.ConversationGuardScreen
+import java.io.File
+import java.io.FileOutputStream
+import kotlin.math.abs
+import kotlin.math.sqrt
+import android.os.Build
+
+
+class MainActivity : ComponentActivity() {
+
+    // This flag is read/written from multiple threads (UI + audio thread).
+    // Without @Volatile the audio loop may never see updates and never stop.
+    @Volatile
+    private var isRecording: Boolean = false
+
+    private var audioRecord: AudioRecord? = null
+
+    private val lightDecider = LightDecider()
+
+    private val requestPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+                startListening()
+            } else {
+                AppState.setError("Microphone permission denied")
+            }
+        }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // Copy model from assets to internal storage and init whisper
+        val modelPath = prepareModelFile()
+        Log.d("ConversationGuard", "Model at: $modelPath")
+
+        val ok = WhisperBridge.init(modelPath)
+        if (!ok) {
+            Log.e("ConversationGuard", "Failed to initialize Whisper model")
+            AppState.setError("Failed to initialize speech model.")
+        }
+
+        fun logHardwareInfo(tag: String = "ConversationGuard") {
+            val cores = Runtime.getRuntime().availableProcessors()
+            Log.d(tag, "availableProcessors = $cores")
+            Log.d(tag, "HARDWARE = ${Build.HARDWARE}")
+            Log.d(tag, "BOARD = ${Build.BOARD}")
+            Log.d(tag, "DEVICE = ${Build.DEVICE}, MODEL = ${Build.MODEL}")
+        }
+
+        logHardwareInfo()
+
+        setContent {
+            ConversationGuardScreen(
+                onToggleListening = {
+                    if (isRecording) {
+                        stopListening()
+                    } else {
+                        checkPermissionAndStart()
+                    }
+                }
+            )
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopListening()
+        WhisperBridge.release()
+    }
+
+    // --------------------------------------------------------------------
+    // PERMISSION + ENTRY POINT
+    // --------------------------------------------------------------------
+    private fun checkPermissionAndStart() {
+        when {
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED -> {
+                startListening()
+            }
+
+            else -> {
+                requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+        }
+    }
+
+    // --------------------------------------------------------------------
+    // AUDIO + WHISPER PIPELINE
+    // --------------------------------------------------------------------
+    @SuppressLint("MissingPermission") // we gate this via checkPermissionAndStart()
+    private fun startListening() {
+        if (isRecording) return
+
+        val sampleRate = 16_000
+        val minBuffer = AudioRecord.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+
+        if (minBuffer == AudioRecord.ERROR || minBuffer == AudioRecord.ERROR_BAD_VALUE) {
+            AppState.setError("AudioRecord init failed (buffer size error).")
+            return
+        }
+
+        val recorder = AudioRecord(
+            MediaRecorder.AudioSource.MIC,
+            sampleRate,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            minBuffer * 2
+        )
+
+        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+            AppState.setError("AudioRecord not initialized.")
+            recorder.release()
+            return
+        }
+
+        audioRecord = recorder
+
+        try {
+            recorder.startRecording()
+        } catch (e: Exception) {
+            Log.e("ConversationGuard", "startRecording failed", e)
+            AppState.setError("Failed to start microphone: ${e.message}")
+            recorder.release()
+            audioRecord = null
+            return
+        }
+
+        isRecording = true
+        AppState.setListening(true)
+        AppState.setStatus("Listening...")
+
+        Thread {
+            Log.d("ConversationGuard", "Audio loop started")
+            try {
+                val buffer = ShortArray(minBuffer)
+                val collected = ArrayList<Short>()
+
+                var peak = 0
+                var sumSq = 0.0
+                var count = 0L
+
+                // IMPORTANT:
+                // Loop condition reads @Volatile isRecording, so it sees updates from UI thread.
+                while (isRecording) {
+                    val ar = audioRecord ?: break
+
+                    val read = ar.read(buffer, 0, buffer.size)
+                    if (read > 0) {
+                        for (i in 0 until read) {
+                            val s = buffer[i]
+                            collected.add(s)
+
+                            val v = s.toInt()
+                            val av = abs(v)
+                            if (av > peak) peak = av
+                            sumSq += v.toDouble() * v.toDouble()
+                            count++
+                        }
+                    } else if (read == AudioRecord.ERROR_INVALID_OPERATION ||
+                        read == AudioRecord.ERROR_BAD_VALUE
+                    ) {
+                        Log.e("ConversationGuard", "AudioRecord.read error: $read")
+                        break
+                    }
+                }
+
+                if (collected.isEmpty()) {
+                    Log.w("ConversationGuard", "No audio captured in session")
+                    AppState.setStatus("No audio captured.")
+                    return@Thread
+                }
+
+                val pcm = collected.toShortArray()
+
+                Log.d(
+                    "ConversationGuard",
+                    "Captured ${pcm.size} samples, peak=$peak, count=$count"
+                )
+
+                // Run Whisper once the recording is done
+                val transcript = try {
+                    WhisperBridge.process(pcm) ?: ""
+                } catch (e: UnsatisfiedLinkError) {
+                    Log.e("ConversationGuard", "JNI error while calling WhisperBridge", e)
+                    AppState.setError("Speech model JNI error: ${e.message}")
+                    ""
+                } catch (e: Exception) {
+                    Log.e("ConversationGuard", "Error during transcription", e)
+                    AppState.setError("Transcription error: ${e.message}")
+                    ""
+                }
+
+                val rms = if (count > 0) sqrt(sumSq / count) else 0.0
+
+                val toxicity = ToxicityHeuristics.combinedScore(transcript, peak, rms)
+                val aggression = ToxicityHeuristics.prosodyScore(peak, rms)
+                val light = lightDecider.decide(toxicity, aggression)
+
+                AppState.updateFromAnalysis(
+                    transcript = transcript,
+                    toxicity = toxicity,
+                    anger = aggression,
+                    light = light
+                )
+
+                AppState.setStatus("Listening complete")
+                Log.d(
+                    "ConversationGuard",
+                    "Transcript='$transcript', tox=$toxicity, agg=$aggression, light=$light"
+                )
+            } catch (e: Exception) {
+                Log.e("ConversationGuard", "Audio loop error", e)
+                AppState.setError("Audio error: ${e.message}")
+            } finally {
+                // Make sure UI reflects that we're no longer recording
+                isRecording = false
+                AppState.setListening(false)
+                Log.d("ConversationGuard", "Audio loop finished")
+            }
+        }.start()
+    }
+
+    private fun stopListening() {
+        if (!isRecording && audioRecord == null) {
+            return
+        }
+
+        Log.d("ConversationGuard", "stopListening called")
+        isRecording = false
+
+        // Stop and release the AudioRecord on this thread.
+        audioRecord?.let { ar ->
+            try {
+                if (ar.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    ar.stop()
+                }
+            } catch (e: Exception) {
+                Log.w("ConversationGuard", "AudioRecord.stop() failed", e)
+            } finally {
+                ar.release()
+            }
+        }
+        audioRecord = null
+
+        AppState.setListening(false)
+        AppState.setStatus("Stopped")
+    }
+
+    // --------------------------------------------------------------------
+    // MODEL PREPARATION (same idea as Whisper demo: copy assets to filesDir)
+    // --------------------------------------------------------------------
+    private fun prepareModelFile(): String {
+        val outFile = File(filesDir, "ggml-tiny.en.bin")
+        if (!outFile.exists()) {
+            outFile.parentFile?.mkdirs()
+            assets.open("models/ggml-tiny.en.bin").use { input ->
+                FileOutputStream(outFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+        }
+        return outFile.absolutePath
+    }
+}
+
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/src/main/java/ai/guard/native/WhisperBridge.kt     >>>>>>>>>>>>>>>>>>>>
+
+package ai.guard.native
+
+/**
+ * Thin JNI wrapper around the Whisper C++ bindings.
+ *
+ * nativeInit(modelPath: String): Boolean
+ * nativeProcess(pcm: ShortArray, length: Int): String?
+ * nativeRelease()
+ *
+ * We expose nicer Kotlin helpers: init(), process(), release().
+ */
+object WhisperBridge {
+
+    init {
+        System.loadLibrary("conguard_jni")
+    }
+
+    @JvmStatic
+    external fun nativeInit(modelPath: String): Boolean
+
+    // JNI signature in C++ is (short[], int) – we mirror that here
+    @JvmStatic
+    external fun nativeProcess(pcmData: ShortArray, length: Int): String?
+
+    @JvmStatic
+    external fun nativeRelease()
+
+    fun init(modelPath: String): Boolean = nativeInit(modelPath)
+
+    fun process(pcmData: ShortArray): String? =
+        nativeProcess(pcmData, pcmData.size)
+
+    fun release() = nativeRelease()
+}
+
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/src/main/java/ai/guard/ui/ConversationGuardScreen.kt     >>>>>>>>>>>>>>>>>>>>
+
+package ai.guard.ui
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import ai.guard.AppState
+import ai.guard.logic.Light
+import ai.guard.ui.theme.ConversationGuardTheme
+
+@Composable
+fun ConversationGuardScreen(
+    onToggleListening: () -> Unit
+) {
+    ConversationGuardTheme {
+        Surface(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF141218)),
+            color = Color(0xFF141218)
+        ) {
+            val isListening by AppState.isListening.collectAsState()
+            val status by AppState.status.collectAsState()
+            val text by AppState.lastText.collectAsState()
+            val toxicity by AppState.toxicity.collectAsState()
+            val anger by AppState.anger.collectAsState()
+            val light by AppState.light.collectAsState()
+            val error by AppState.error.collectAsState()
+
+            val lightColor = when (light) {
+                Light.GREEN -> Color(0xFF4CAF50)
+                Light.YELLOW -> Color(0xFFFFC107)
+                Light.RED -> Color(0xFFF44336)
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .size(120.dp)
+                            .background(lightColor, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = when (light) {
+                                Light.GREEN -> "Calm"
+                                Light.YELLOW -> "Caution"
+                                Light.RED -> "Aggressive"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.Black
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text(
+                        text = status,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFFEEEEEE),
+                        textAlign = TextAlign.Center
+                    )
+
+                    if (error != null) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = error ?: "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFFF6F6F),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = true)
+                        .padding(top = 24.dp),
+                    verticalArrangement = Arrangement.Top
+                ) {
+                    Text(
+                        text = "Transcript",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color(0xFFAAAAAA)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = text.ifBlank { "No speech captured yet." },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFFEEEEEE)
+                    )
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    Text(
+                        text = "Scores",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color(0xFFAAAAAA)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Toxicity: ${(toxicity * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFFEEEEEE)
+                    )
+                    Text(
+                        text = "Aggression (prosody): ${(anger * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFFEEEEEE)
+                    )
+                }
+
+                Button(
+                    onClick = onToggleListening,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp)
+                ) {
+                    Text(
+                        text = if (isListening) "Stop listening" else "Start listening"
+                    )
+                }
+            }
+        }
+    }
+}
+
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/src/main/java/ai/guard/ui/theme/Color.kt     >>>>>>>>>>>>>>>>>>>>
+
+package ai.guard.ui.theme
+
+import androidx.compose.ui.graphics.Color
+
+val Black = Color(0xFF000000)
+val CardBG = Color(0xFF1C1C1E)
+val CardBorder = Color(0x33FFFFFF)
+
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/src/main/java/ai/guard/ui/theme/Theme.kt     >>>>>>>>>>>>>>>>>>>>
+
+package ai.guard.ui.theme
+
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.runtime.Composable
+
+private val DarkColors = darkColorScheme(
+    primary = CardBG,
+    background = Black,
+    surface = CardBG,
+    onPrimary = androidx.compose.ui.graphics.Color.White,
+    onSurface = androidx.compose.ui.graphics.Color.White,
+    onBackground = androidx.compose.ui.graphics.Color.White
+)
+
+@Composable
+fun ConversationGuardTheme(content: @Composable () -> Unit) {
+    MaterialTheme(
+        colorScheme = DarkColors,
+        typography = Typography,
+        content = content
+    )
+}
+
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/src/main/java/ai/guard/ui/theme/Type.kt     >>>>>>>>>>>>>>>>>>>>
+
+package ai.guard.ui.theme
+
+import androidx.compose.material3.Typography
+
+val Typography = Typography()
+
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/src/main/res/values/colors.xml     >>>>>>>>>>>>>>>>>>>>
+
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="purple_200">#FFBB86FC</color>
+    <color name="purple_500">#FF6200EE</color>
+    <color name="purple_700">#FF3700B3</color>
+    <color name="teal_200">#FF03DAC5</color>
+    <color name="teal_700">#FF018786</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/src/main/res/values/strings.xml     >>>>>>>>>>>>>>>>>>>>
+
+<resources>
+    <string name="app_name">ConversationGuard</string>
+</resources>
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/src/main/res/values/themes.xml     >>>>>>>>>>>>>>>>>>>>
+
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.ConversationGuard" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:statusBarColor">@android:color/black</item>
+        <item name="android:navigationBarColor">@android:color/black</item>
+    </style>
+</resources>
+
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/src/main/res/xml/backup_rules.xml     >>>>>>>>>>>>>>>>>>>>
+
+<?xml version="1.0" encoding="utf-8"?><!--
+   Sample backup rules file; uncomment and customize as necessary.
+   See https://developer.android.com/guide/topics/data/autobackup
+   for details.
+   Note: This file is ignored for devices older than API 31
+   See https://developer.android.com/about/versions/12/backup-restore
+-->
+<full-backup-content>
+    <!--
+   <include domain="sharedpref" path="."/>
+   <exclude domain="sharedpref" path="device.xml"/>
+-->
+</full-backup-content>
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/app/src/main/res/xml/data_extraction_rules.xml     >>>>>>>>>>>>>>>>>>>>
+
+<?xml version="1.0" encoding="utf-8"?><!--
+   Sample data extraction rules file; uncomment and customize as necessary.
+   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
+   for details.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- TODO: Use <include> and <exclude> to control what is backed up.
+        <include .../>
+        <exclude .../>
+        -->
+    </cloud-backup>
+    <!--
+    <device-transfer>
+        <include .../>
+        <exclude .../>
+    </device-transfer>
+    -->
+</data-extraction-rules>
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/gradle.properties     >>>>>>>>>>>>>>>>>>>>
+
+# Project-wide Gradle settings.
+# IDE (e.g. Android Studio) users:
+# Gradle settings configured through the IDE *will override*
+# any settings specified in this file.
+# For more details on how to configure your build environment visit
+# http://www.gradle.org/docs/current/userguide/build_environment.html
+# Specifies the JVM arguments used for the daemon process.
+# The setting is particularly useful for tweaking memory settings.
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+# When configured, Gradle will run in incubating parallel mode.
+# This option should only be used with decoupled projects. For more details, visit
+# https://developer.android.com/r/tools/gradle-multi-project-decoupled-projects
+# org.gradle.parallel=true
+# AndroidX package structure to make it clearer which packages are bundled with the
+# Android operating system, and which are packaged with your app's APK
+# https://developer.android.com/topic/libraries/support-library/androidx-rn
+android.useAndroidX=true
+# Kotlin code style for this project: "official" or "obsolete":
+kotlin.code.style=official
+# Enables namespacing of each library's R class so that its R class includes only the
+# resources declared in the library itself and none from the library's dependencies,
+# thereby reducing the size of the R class for that library
+android.nonTransitiveRClass=true
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/local.properties     >>>>>>>>>>>>>>>>>>>>
+
+## This file is automatically generated by Android Studio.
+# Do not modify this file -- YOUR CHANGES WILL BE ERASED!
+#
+# This file should *NOT* be checked into Version Control Systems,
+# as it contains information specific to your local configuration.
+#
+# Location of the SDK. This is only used by Gradle.
+# For customization when using a Version Control System, please read the
+# header note.
+sdk.dir=C\:\\Users\\ChinmayKapoor\\AppData\\Local\\Android\\Sdk
+
+<<<<<<<<<<<<<<<<<<    /mnt/c/Users/ChinmayKapoor/Projects-1/ConversationGuard/settings.gradle.kts     >>>>>>>>>>>>>>>>>>>>
+
+pluginManagement {
+    repositories {
+        google {
+            content {
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google.*")
+                includeGroupByRegex("androidx.*")
+            }
+        }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "ConversationGuard"
+include(":app")

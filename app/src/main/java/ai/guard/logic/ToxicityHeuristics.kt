@@ -15,11 +15,11 @@ object ToxicityHeuristics {
 
     // Extremely small example lexicon, you can expand this.
     private val profanityTerms = listOf(
-        "fuck", "fucking", "stupid", "bitch", "bastard", "asshole", "dick"
+        "word1", "word2", "words", "words", "keep", "idiot", "as you like"
     )
 
     private val threatPhrases = listOf(
-        "kill you", "beat you", "hurt you", "smack you", "punch you"
+        "i dont like you", "beat you", "hurt you", "smack you", "punch you"
     )
 
     private val identityPhrases = listOf(

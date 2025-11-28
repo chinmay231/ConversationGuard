@@ -1,0 +1,33 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Local configuration
+local.properties
+
+# Android Studio
+.idea/
+*.iml
+*.hprof
+
+# Generated
+captures/
+outputs/
+*.log
+
+# Keystore
+*.jks
+*.keystore
+
+# Caches
+.DS_Store
+.kotlinc/
+.cxx/
+
+# APK/AAB
+*.apk
+*.aab
+
+# Old native backend (remove all)
+app/src/main/cpp/
